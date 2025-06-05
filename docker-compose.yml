@@ -20,6 +20,19 @@ volumes:
   mysql_data:
 
 services:
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: always
+
   mysql:
     image: mysql:8.0
     environment:
@@ -106,6 +119,8 @@ services:
       config-service:
         condition: service_healthy
       eureka-discoveryservice:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     environment:
       - SPRING_CLOUD_CONFIG_URI=http://config-service:5555
