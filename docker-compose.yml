@@ -1,0 +1,313 @@
+version: '3.8'
+
+name: payflow-manager
+
+networks:
+  backend:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16
+  frontend:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.21.0.0/16
+
+volumes:
+  mysql_data:
+
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_ALLOW_EMPTY_PASSWORD: 'no'
+      MYSQL_ROOT_HOST: '%'
+      MYSQL_USER: payflow_user
+      MYSQL_PASSWORD: payflow_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./setup.sql:/docker-entrypoint-initdb.d/setup.sql
+    networks:
+      - backend    
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+    restart: always
+
+  config-service:
+    build:
+      context: ./config-service
+      dockerfile: Dockerfile
+    ports:
+      - "5555:5555"    
+    volumes:
+      - ./cloud-conf:/cloud-conf
+    networks:
+      backend:
+        aliases:
+          - config-service
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    environment:
+      - SPRING_PROFILES_ACTIVE=native
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:5555/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+  eureka-discoveryservice:
+    build:
+      context: ./eureka-discoveryservice
+      dockerfile: Dockerfile
+    ports:
+      - "8761:8761"
+    depends_on:
+      config-service:
+        condition: service_healthy
+    environment:
+      - SPRING_CLOUD_CONFIG_URI=http://config-service:5555
+      - SPRING_CLOUD_CONFIG_FAIL_FAST=true
+      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://eureka-discoveryservice:8761/eureka/
+      - EUREKA_INSTANCE_HOSTNAME=eureka-discoveryservice
+      - EUREKA_INSTANCE_PREFER_IP_ADDRESS=true
+      - EUREKA_SERVER_WAIT_TIME_IN_MS_WHEN_SYNC_EMPTY=5
+      - EUREKA_SERVER_ENABLE_SELF_PRESERVATION=false
+      - EUREKA_SERVER_RENEWAL_PERCENT_THRESHOLD=0.85
+      - EUREKA_CLIENT_REGISTRY_FETCH_INTERVAL_SECONDS=5
+      - JAVA_OPTS=-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0
+    networks:
+      - backend    
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8761/eureka/apps/"]
+      interval: 20s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  gateway-service:
+    build:
+      context: ./gatewayservice
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    depends_on:
+      config-service:
+        condition: service_healthy
+      eureka-discoveryservice:
+        condition: service_healthy
+    environment:
+      - SPRING_CLOUD_CONFIG_URI=http://config-service:5555
+      - SPRING_CLOUD_CONFIG_FAIL_FAST=true
+      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://eureka-discoveryservice:8761/eureka/
+      - EUREKA_INSTANCE_HOSTNAME=gateway-service
+      - EUREKA_INSTANCE_PREFER_IP_ADDRESS=true
+      - SPRING_CLOUD_DISCOVERY_ENABLED=true
+      - EUREKA_CLIENT_REGISTER_WITH_EUREKA=true
+      - EUREKA_CLIENT_FETCH_REGISTRY=true
+      - JAVA_OPTS=-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0
+    networks:
+      - frontend
+      - backend
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  auth-service:
+    build:
+      context: ./authentificationservice
+      dockerfile: Dockerfile
+    ports:
+      - "8087:8087"
+    depends_on:
+      config-service:
+        condition: service_healthy
+      eureka-discoveryservice:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+    environment:
+      - SPRING_CLOUD_CONFIG_URI=http://config-service:5555
+      - SPRING_CLOUD_CONFIG_FAIL_FAST=true
+      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://eureka-discoveryservice:8761/eureka/
+      - EUREKA_INSTANCE_HOSTNAME=auth-service
+      - EUREKA_INSTANCE_PREFER_IP_ADDRESS=true
+      - SPRING_CLOUD_DISCOVERY_ENABLED=true
+      - EUREKA_CLIENT_REGISTER_WITH_EUREKA=true
+      - EUREKA_CLIENT_FETCH_REGISTRY=true
+      - JAVA_OPTS=-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8087/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  client-service:
+    build:
+      context: ./client-service
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8081"
+    depends_on:
+      config-service:
+        condition: service_healthy
+      eureka-discoveryservice:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    environment:
+      - SPRING_CLOUD_CONFIG_URI=http://config-service:5555
+      - SPRING_CLOUD_CONFIG_FAIL_FAST=true
+      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://eureka-discoveryservice:8761/eureka/
+      - EUREKA_INSTANCE_HOSTNAME=client-service
+      - EUREKA_INSTANCE_PREFER_IP_ADDRESS=true
+      - SPRING_CLOUD_DISCOVERY_ENABLED=true
+      - EUREKA_CLIENT_REGISTER_WITH_EUREKA=true
+      - EUREKA_CLIENT_FETCH_REGISTRY=true
+      - JAVA_OPTS=-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8081/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  produit-service:
+    build:
+      context: ./produit-service
+      dockerfile: Dockerfile
+    ports:
+      - "8082:8082"
+    depends_on:
+      config-service:
+        condition: service_healthy
+      eureka-discoveryservice:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    environment:
+      - SPRING_CLOUD_CONFIG_URI=http://config-service:5555
+      - SPRING_CLOUD_CONFIG_FAIL_FAST=true
+      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://eureka-discoveryservice:8761/eureka/
+      - EUREKA_INSTANCE_HOSTNAME=produit-service
+      - EUREKA_INSTANCE_PREFER_IP_ADDRESS=true
+      - SPRING_CLOUD_DISCOVERY_ENABLED=true
+      - EUREKA_CLIENT_REGISTER_WITH_EUREKA=true
+      - EUREKA_CLIENT_FETCH_REGISTRY=true
+      - JAVA_OPTS=-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0
+    networks:
+      - backend    
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8082/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  facture-service:
+    build:
+      context: ./factureservice
+      dockerfile: Dockerfile
+    ports:
+      - "8083:8083"
+    depends_on:
+      config-service:
+        condition: service_healthy
+      eureka-discoveryservice:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    environment:
+      - SPRING_CLOUD_CONFIG_URI=http://config-service:5555
+      - SPRING_CLOUD_CONFIG_FAIL_FAST=true
+      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://eureka-discoveryservice:8761/eureka/
+      - EUREKA_INSTANCE_HOSTNAME=facture-service
+      - EUREKA_INSTANCE_PREFER_IP_ADDRESS=true
+      - SPRING_CLOUD_DISCOVERY_ENABLED=true
+      - EUREKA_CLIENT_REGISTER_WITH_EUREKA=true
+      - EUREKA_CLIENT_FETCH_REGISTRY=true
+      - JAVA_OPTS=-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8083/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  reglement-service:
+    build:
+      context: ./reglement-service
+      dockerfile: Dockerfile
+    ports:
+      - "8084:8084"
+    depends_on:
+      config-service:
+        condition: service_healthy
+      eureka-discoveryservice:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    environment:
+      - SPRING_CLOUD_CONFIG_URI=http://config-service:5555
+      - SPRING_CLOUD_CONFIG_FAIL_FAST=true
+      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://eureka-discoveryservice:8761/eureka/
+      - EUREKA_INSTANCE_HOSTNAME=reglement-service
+      - EUREKA_INSTANCE_PREFER_IP_ADDRESS=true
+      - SPRING_CLOUD_DISCOVERY_ENABLED=true
+      - EUREKA_CLIENT_REGISTER_WITH_EUREKA=true
+      - EUREKA_CLIENT_FETCH_REGISTRY=true
+      - JAVA_OPTS=-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8084/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./PayFlow_Manager
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      gateway-service:
+        condition: service_healthy
+    networks:
+      - frontend
+      - backend
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
