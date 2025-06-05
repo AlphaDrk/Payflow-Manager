@@ -3,6 +3,18 @@ spring:
     enabled: true
   application:
     name: authentification-service
+  datasource:
+    hikari:
+      initialization-timeout: 60000
+      connection-timeout: 60000
+      minimum-idle: 1
+      maximum-pool-size: 5
+  jpa:
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+    show-sql: true
 
 management:
   endpoints:
@@ -14,7 +26,25 @@ management:
     health:
       show-details: always
       enabled: true
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: db,diskSpace,ping
+        liveness:
+          include: ping
     info:
+      enabled: true
+  health:
+    defaults:
+      enabled: true
+    db:
+      enabled: true
+    diskspace:
+      enabled: true
+    livenessstate:
+      enabled: true
+    readinessstate:
       enabled: true
 
 logging:
@@ -22,3 +52,6 @@ logging:
     org.springframework.security: DEBUG
     org.springframework.web: DEBUG
     org.springframework.actuator: DEBUG
+    org.springframework.boot.actuate: DEBUG
+    com.zaxxer.hikari: DEBUG
+    org.hibernate: INFO

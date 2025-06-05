@@ -7,9 +7,12 @@ import org.ms.authentificationservice.repositories.AppUserRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
 import java.util.List;
 
 @Service
+@Transactional
 public class UserServiceImpl implements UserService {
     private final AppUserRepository appUserRepository;
     private final AppRoleRepository appRoleRepository;
@@ -24,6 +27,11 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public AppUser addUser(AppUser appUser) {
+        // Check if user already exists
+        AppUser existingUser = appUserRepository.findByUsername(appUser.getUsername());
+        if (existingUser != null) {
+            throw new RuntimeException("Username already exists: " + appUser.getUsername());
+        }
         appUser.setPassword(passwordEncoder.encode(appUser.getPassword()));
         return appUserRepository.save(appUser);
     }
@@ -37,7 +45,7 @@ public class UserServiceImpl implements UserService {
     public void addRoleToUser(String username, String roleName) {
         AppUser user = appUserRepository.findByUsername(username);
         AppRole role = appRoleRepository.findByRoleName(roleName);
-        if (user != null && role != null) {
+        if (user != null && role != null && !user.getRoles().contains(role)) {
             user.getRoles().add(role);
             appUserRepository.save(user);
         }
@@ -45,7 +53,11 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public AppUser getUserByName(String username) {
-        return appUserRepository.findByUsername(username);
+        AppUser user = appUserRepository.findByUsername(username);
+        if (user == null) {
+            throw new RuntimeException("User not found: " + username);
+        }
+        return user;
     }
 
     @Override
